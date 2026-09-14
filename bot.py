@@ -5,36 +5,28 @@ import sqlite3
 from telethon import TelegramClient, events, errors
 
 
-# ==================================================
+# ==============================
 # НАСТРОЙКИ
-# ==================================================
+# ==============================
 
 API_ID = 30686053
 API_HASH = "e564c17caee89b1b70f89ad5a43eebcf"
 
-# ID НОВОЙ ГРУППЫ
 CHAT_ID = -1004350659392
-
-# ID владельца
 OWNER_ID = 5679778859
 
-# Счётчик
 END_NUMBER = 1_000_000
 
-# Задержка между сообщениями
-MIN_DELAY = 2.0
-MAX_DELAY = 3.0
+MIN_DELAY = 2
+MAX_DELAY = 3
 
-# SQLite
 DATABASE = "counter.db"
-
-# Файл сессии Telethon
 SESSION_NAME = "counter_session"
 
 
-# ==================================================
-# DATABASE
-# ==================================================
+# ==============================
+# SQLITE
+# ==============================
 
 db = sqlite3.connect(
     DATABASE,
@@ -57,16 +49,11 @@ db.commit()
 
 
 def get_last_number():
-    cursor = db.execute(
+    row = db.execute(
         "SELECT last_sent FROM counter WHERE id = 1"
-    )
+    ).fetchone()
 
-    row = cursor.fetchone()
-
-    if row:
-        return row[0]
-
-    return 0
+    return row[0] if row else 0
 
 
 def save_last_number(number):
@@ -74,13 +61,12 @@ def save_last_number(number):
         "UPDATE counter SET last_sent = ? WHERE id = 1",
         (number,)
     )
-
     db.commit()
 
 
-# ==================================================
-# TELETHON
-# ==================================================
+# ==============================
+# TELEGRAM
+# ==============================
 
 client = TelegramClient(
     SESSION_NAME,
@@ -90,214 +76,112 @@ client = TelegramClient(
 
 counting = False
 counter_task = None
+target_chat = None
 
 
-# ==================================================
-# ПРОВЕРКА ГРУППЫ
-# ==================================================
+# ==============================
+# ПОИСК ГРУППЫ
+# ==============================
 
-async def get_target_chat():
-
-    print("🔎 Ищу группу...")
+async def prepare_chat():
+    global target_chat
 
     try:
+        target_chat = await client.get_entity(CHAT_ID)
 
-        chat = await client.get_entity(CHAT_ID)
-
-        print()
         print("✅ Группа найдена!")
-        print(f"📌 Название: {getattr(chat, 'title', 'Без названия')}")
-        print(f"🆔 ID: {chat.id}")
-        print()
+        print("Название:", getattr(target_chat, "title", "Без названия"))
+        print("ID:", target_chat.id)
 
-        return chat
+        return True
 
     except Exception as e:
-
-        print()
-        print("❌ Не удалось найти группу.")
-        print()
-        print("Ошибка:")
+        print("❌ Не удалось найти группу:")
         print(type(e).__name__, e)
         print()
+        print("Убедись, что аккаунт состоит в этой группе.")
 
-        print(
-            "Проверь, что аккаунт Telethon "
-            "вступил в эту группу."
-        )
-
-        return None
+        return False
 
 
-# ==================================================
+# ==============================
 # СЧЁТЧИК
-# ==================================================
+# ==============================
 
-async def counter_loop(chat):
+async def counter_loop():
 
     global counting
 
     number = get_last_number() + 1
 
-    if number > END_NUMBER:
-
-        print()
-        print("🎉 Счётчик уже достиг 1 000 000!")
-
-        counting = False
-        return
-
     print()
-    print("========================================")
     print("🚀 СЧЁТЧИК ЗАПУЩЕН")
-    print("========================================")
-    print(f"📊 Последнее сохранённое: {get_last_number()}")
-    print(f"➡️ Начинаем с: {number}")
-    print(f"🏁 Цель: {END_NUMBER}")
-    print("⏱ Задержка: 2–3 секунды")
-    print("========================================")
+    print("Начало:", number)
+    print("Конец:", END_NUMBER)
+    print("КД: 2–3 секунды")
     print()
-
-    counting = True
 
     while counting and number <= END_NUMBER:
 
         try:
 
-            # ------------------------------------------
-            # ОТПРАВКА
-            # ------------------------------------------
-
             await client.send_message(
-                chat,
+                target_chat,
                 str(number)
             )
 
-            # ------------------------------------------
-            # СОХРАНЕНИЕ В SQLITE
-            # ------------------------------------------
-
             save_last_number(number)
 
-            print(
-                f"✅ Отправлено: {number}"
-            )
+            print("✅ Отправлено:", number)
 
             number += 1
-
-            # ------------------------------------------
-            # ПРОВЕРКА ОКОНЧАНИЯ
-            # ------------------------------------------
 
             if number > END_NUMBER:
 
                 print()
-                print("========================================")
-                print("🎉 ГОТОВО!")
-                print("🎉 ДОСТИГНУТО 1 000 000")
-                print("========================================")
+                print("🎉 ДОСТИГНУТО 1 000 000!")
 
                 counting = False
                 break
-
-            # ------------------------------------------
-            # КД 2–3 СЕКУНДЫ
-            # ------------------------------------------
 
             delay = random.uniform(
                 MIN_DELAY,
                 MAX_DELAY
             )
 
-            print(
-                f"⏳ Следующее сообщение "
-                f"через {delay:.2f} сек."
-            )
-
             await asyncio.sleep(delay)
-
-        # ------------------------------------------
-        # FLOOD WAIT
-        # ------------------------------------------
 
         except errors.FloodWaitError as e:
 
-            print()
-            print("⚠️ TELEGRAM FLOOD WAIT")
             print(
-                f"⏳ Telegram попросил "
-                f"подождать {e.seconds} сек."
+                f"⚠️ Telegram попросил подождать "
+                f"{e.seconds} секунд."
             )
-            print("⏸ Счётчик временно остановлен.")
-            print()
 
             await asyncio.sleep(e.seconds)
 
-            print("▶ Продолжаем...")
-
-        # ------------------------------------------
-        # НЕТ ПРАВА ПИСАТЬ
-        # ------------------------------------------
-
         except errors.ChatWriteForbiddenError:
 
-            print()
-            print("❌ В этой группе нельзя отправлять сообщения.")
-            print("🛑 Счётчик остановлен.")
-
+            print("❌ Нельзя писать в эту группу.")
             counting = False
-
-        # ------------------------------------------
-        # БАН
-        # ------------------------------------------
 
         except errors.UserBannedInChannelError:
 
-            print()
-            print("❌ Этот аккаунт заблокирован в группе.")
-            print("🛑 Счётчик остановлен.")
-
+            print("❌ Аккаунт заблокирован в группе.")
             counting = False
-
-        # ------------------------------------------
-        # НУЖНЫ ПРАВА
-        # ------------------------------------------
-
-        except errors.ChatAdminRequiredError:
-
-            print()
-            print("❌ Для этого действия нужны права администратора.")
-            print("🛑 Счётчик остановлен.")
-
-            counting = False
-
-        # ------------------------------------------
-        # ДРУГАЯ ОШИБКА
-        # ------------------------------------------
 
         except Exception as e:
 
-            print()
-            print("❌ Неожиданная ошибка:")
-            print(
-                f"{type(e).__name__}: {e}"
-            )
-            print()
-
-            print("⏳ Повтор через 5 секунд...")
+            print("❌ Ошибка:", type(e).__name__, e)
 
             await asyncio.sleep(5)
 
 
-# ==================================================
+# ==============================
 # /startcount
-# ==================================================
+# ==============================
 
-@client.on(
-    events.NewMessage(
-        pattern=r"^/startcount$"
-    )
-)
+@client.on(events.NewMessage(pattern=r"^/startcount$"))
 async def start_count(event):
 
     global counting
@@ -307,48 +191,33 @@ async def start_count(event):
         return
 
     if counting:
-
-        await event.reply(
-            "⚠️ Счётчик уже работает."
-        )
-
+        await event.reply("⚠️ Счётчик уже работает.")
         return
 
-    chat = await get_target_chat()
-
-    if chat is None:
-
-        await event.reply(
-            "❌ Не удалось найти группу.\n"
-            "Проверь, что аккаунт состоит в ней."
-        )
-
+    if target_chat is None:
+        await event.reply("❌ Группа не найдена.")
         return
 
     counting = True
 
     counter_task = asyncio.create_task(
-        counter_loop(chat)
+        counter_loop()
     )
 
     await event.reply(
         "🚀 Счётчик запущен!\n\n"
-        f"📊 Последнее: {get_last_number()}\n"
-        f"➡️ Следующее: {get_last_number() + 1}\n"
-        f"🏁 Цель: {END_NUMBER}\n"
-        "⏱ КД: 2–3 сек."
+        f"Последнее: {get_last_number()}\n"
+        f"Следующее: {get_last_number() + 1}\n"
+        f"Цель: {END_NUMBER}\n"
+        "КД: 2–3 сек."
     )
 
 
-# ==================================================
+# ==============================
 # /stopcount
-# ==================================================
+# ==============================
 
-@client.on(
-    events.NewMessage(
-        pattern=r"^/stopcount$"
-    )
-)
+@client.on(events.NewMessage(pattern=r"^/stopcount$"))
 async def stop_count(event):
 
     global counting
@@ -357,206 +226,122 @@ async def stop_count(event):
         return
 
     if not counting:
-
-        await event.reply(
-            "ℹ️ Счётчик сейчас остановлен."
-        )
-
+        await event.reply("ℹ️ Счётчик уже остановлен.")
         return
 
     counting = False
 
     await event.reply(
         "🛑 Счётчик остановлен.\n\n"
-        f"📊 Последнее сохранённое число: "
-        f"{get_last_number()}"
+        f"Последнее число: {get_last_number()}"
     )
 
 
-# ==================================================
+# ==============================
 # /status
-# ==================================================
+# ==============================
 
-@client.on(
-    events.NewMessage(
-        pattern=r"^/status$"
-    )
-)
+@client.on(events.NewMessage(pattern=r"^/status$"))
 async def status(event):
 
     if event.sender_id != OWNER_ID:
         return
 
-    last_number = get_last_number()
+    state = "🟢 Работает" if counting else "🔴 Остановлен"
 
-    if counting:
-        state = "🟢 Работает"
-    else:
-        state = "🔴 Остановлен"
+    last = get_last_number()
 
     await event.reply(
-        "📊 СТАТУС СЧЁТЧИКА\n\n"
+        "📊 СТАТУС\n\n"
         f"Состояние: {state}\n"
-        f"Последнее: {last_number}\n"
-        f"Следующее: {last_number + 1}\n"
-        f"Цель: {END_NUMBER}\n"
-        "⏱ КД: 2–3 секунды"
+        f"Последнее: {last}\n"
+        f"Следующее: {last + 1}\n"
+        f"Цель: {END_NUMBER}"
     )
 
 
-# ==================================================
+# ==============================
 # /resetcount
-# ==================================================
+# ==============================
 
-@client.on(
-    events.NewMessage(
-        pattern=r"^/resetcount$"
-    )
-)
+@client.on(events.NewMessage(pattern=r"^/resetcount$"))
 async def reset_count(event):
 
     if event.sender_id != OWNER_ID:
         return
 
     if counting:
-
         await event.reply(
-            "❌ Сначала останови счётчик:\n"
-            "/stopcount"
+            "❌ Сначала используй /stopcount"
         )
-
         return
 
     save_last_number(0)
 
     await event.reply(
-        "♻️ Счётчик сброшен.\n\n"
-        "➡️ Следующее число: 1"
+        "♻️ Счётчик сброшен.\n"
+        "Следующее число: 1"
     )
 
 
-# ==================================================
-# MAIN
-# ==================================================
+# ==============================
+# ЗАПУСК
+# ==============================
 
 async def main():
 
-    print()
-    print("========================================")
+    print("================================")
     print("🤖 TELEGRAM COUNTER")
-    print("========================================")
-    print("🔌 Подключение к Telegram...")
-    print()
+    print("================================")
 
     await client.start()
 
-    # ------------------------------------------
-    # ДАННЫЕ АККАУНТА
-    # ------------------------------------------
-
     me = await client.get_me()
 
-    print(
-        f"👤 Имя: {me.first_name or 'Без имени'}"
-    )
-
-    print(
-        f"🆔 ID аккаунта: {me.id}"
-    )
-
-    print()
-
-    # ------------------------------------------
-    # ПРОВЕРКА OWNER ID
-    # ------------------------------------------
+    print("👤 Аккаунт:", me.first_name)
+    print("🆔 ID:", me.id)
 
     if me.id != OWNER_ID:
 
-        print("❌ ОШИБКА АККАУНТА!")
         print()
-        print(
-            f"Текущий ID: {me.id}"
-        )
-
-        print(
-            f"Нужный ID: {OWNER_ID}"
-        )
-
-        print()
-        print(
-            "Авторизуй Telethon под нужным "
-            "Telegram-аккаунтом."
-        )
+        print("❌ Неправильный аккаунт!")
+        print("Текущий ID:", me.id)
+        print("Нужный ID:", OWNER_ID)
 
         await client.disconnect()
-
         return
 
     print("✅ Аккаунт подтверждён.")
-    print()
 
-    # ------------------------------------------
-    # ПОЛУЧЕНИЕ ГРУППЫ
-    # ------------------------------------------
-
-    chat = await get_target_chat()
-
-    if chat is None:
-
-        print()
-        print("❌ Запуск невозможен.")
-        print(
-            "Вступи аккаунтом в группу "
-            "и попробуй снова."
-        )
+    if not await prepare_chat():
 
         await client.disconnect()
-
         return
 
-    # ------------------------------------------
-    # ИНФОРМАЦИЯ
-    # ------------------------------------------
-
-    last_number = get_last_number()
-
     print()
-    print("========================================")
-    print("📊 СЧЁТЧИК")
-    print("========================================")
-    print(f"Последнее число: {last_number}")
-    print(f"Следующее число: {last_number + 1}")
-    print(f"Цель: {END_NUMBER}")
-    print("КД: 2–3 секунды")
-    print("========================================")
+    print("💾 Последнее число:", get_last_number())
+    print("➡️ Следующее:", get_last_number() + 1)
     print()
-
     print("Команды:")
     print("/startcount")
     print("/stopcount")
     print("/status")
     print("/resetcount")
     print()
-
-    print("✅ Бот готов.")
-    print()
+    print("✅ Готово.")
 
     await client.run_until_disconnected()
 
 
-# ==================================================
-# ЗАПУСК
-# ==================================================
+# ==============================
+# START
+# ==============================
 
 try:
-
     asyncio.run(main())
 
 except KeyboardInterrupt:
-
-    print()
-    print("🛑 Программа остановлена.")
+    print("🛑 Остановлено.")
 
 finally:
-
     db.close()
